@@ -1,8 +1,9 @@
 #%%
 import argparse
 import json
+from pytorch_lightning.metrics.utils import METRIC_EPS
 from collections import OrderedDict
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any, Union
 
 import numpy as np
 import torch
@@ -27,7 +28,7 @@ def group_by_key(list_dicts: List[dict], key: Any) -> defaultdict:
     return groups
 
 
-def get_envelope(precisions: np.ndarray) -> np.array:
+def get_envelope(precisions: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
     """Compute the envelope of the precision curve.
 
     Args:
@@ -36,12 +37,13 @@ def get_envelope(precisions: np.ndarray) -> np.array:
     Returns: enveloped precision
 
     """
-    for i in range(precisions.size - 1, 0, -1):
-        precisions[i - 1] = np.maximum(precisions[i - 1], precisions[i])
+    for i in range(precisions.size(0) - 1, 0, -1):
+        precisions[i - 1] = torch.max(precisions[i - 1], precisions[i])
     return precisions
 
 
-def get_ap(recalls: np.ndarray, precisions: np.ndarray) -> float:
+def get_ap(recalls: Union[torch.Tensor, np.ndarray], precisions: Union[torch.Tensor, np.ndarray]) \
+        -> Union[torch.Tensor, float]:
     """Calculate area under precision/recall curve.
 
     Args:
@@ -53,22 +55,31 @@ def get_ap(recalls: np.ndarray, precisions: np.ndarray) -> float:
     """
     # correct AP calculation
     # first append sentinel values at the end
-    recalls = np.concatenate(([0.0], recalls, [1.0]))
-    precisions = np.concatenate(([0.0], precisions, [0.0]))
+    # recalls = torch.tensor(recalls)
+    # precisions = torch.tensor(precisions)
+
+    recalls = torch.cat((torch.tensor([0.0]),
+                         recalls,
+                         torch.tensor([1.0])))
+
+    precisions = torch.cat((torch.tensor([0.0]),
+                            precisions,
+                            torch.tensor([0.0])))
 
     precisions = get_envelope(precisions)
 
     # to calculate area under PR curve, look for points where X axis (recall) changes value
-    i = np.where(recalls[1:] != recalls[:-1])[0]
+    i = torch.where(recalls[1:] != recalls[:-1])[0]
 
     # and sum (\Delta recall) * prec
-    ap = np.sum((recalls[i + 1] - recalls[i]) * precisions[i + 1])
+    ap = torch.sum((recalls[i + 1] - recalls[i]) * precisions[i + 1])
     return ap
 
 
-def get_overlaps(gt_boxes: np.ndarray, box: np.ndarray) -> np.ndarray:
-    i_xmin = np.maximum(gt_boxes[:, 0], box[0])
-    i_ymin = np.maximum(gt_boxes[:, 1], box[1])
+def get_overlaps(gt_boxes: Union[torch.Tensor, np.ndarray],
+                 box: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
+    i_xmin = torch.max(gt_boxes[:, 0], box[0])
+    i_ymin = torch.max(gt_boxes[:, 1], box[1])
 
     gt_xmax = gt_boxes[:, 0] + gt_boxes[:, 2]
     gt_ymax = gt_boxes[:, 1] + gt_boxes[:, 3]
@@ -76,11 +87,11 @@ def get_overlaps(gt_boxes: np.ndarray, box: np.ndarray) -> np.ndarray:
     box_xmax = box[0] + box[2]
     box_ymax = box[1] + box[3]
 
-    i_xmax = np.minimum(gt_xmax, box_xmax)
-    i_ymax = np.minimum(gt_ymax, box_ymax)
+    i_xmax = torch.min(gt_xmax, box_xmax)
+    i_ymax = torch.min(gt_ymax, box_ymax)
 
-    iw = np.maximum(i_xmax - i_xmin, 0.0)
-    ih = np.maximum(i_ymax - i_ymin, 0.0)
+    iw = torch.max(i_xmax - i_xmin, torch.tensor(0.0))
+    ih = torch.max(i_ymax - i_ymin, torch.tensor(0.0))
 
     intersection = iw * ih
 
@@ -92,25 +103,25 @@ def get_overlaps(gt_boxes: np.ndarray, box: np.ndarray) -> np.ndarray:
 
 
 def recall_precision(
-    gt: np.ndarray, predictions: np.ndarray, iou_threshold: float
+    gt: List[dict], predictions: List[dict], iou_threshold: float
 ) -> Tuple[np.array, np.array, np.array]:
     num_gts = len(gt)
     image_gts = group_by_key(gt, "image_id")
 
     image_gt_boxes = {
-        img_id: np.array([[float(z) for z in b["bbox"]] for b in boxes]) for img_id, boxes in image_gts.items()
+        img_id: torch.tensor([[float(z) for z in b["bbox"]] for b in boxes]) for img_id, boxes in image_gts.items()
     }
-    image_gt_checked = {img_id: np.zeros(len(boxes)) for img_id, boxes in image_gts.items()}
+    image_gt_checked = {img_id: torch.zeros(len(boxes)) for img_id, boxes in image_gts.items()}
 
     predictions = sorted(predictions, key=lambda x: x["score"], reverse=True)
 
     # go down dets and mark TPs and FPs
     num_predictions = len(predictions)
-    tp = np.zeros(num_predictions)
-    fp = np.zeros(num_predictions)
+    tp = torch.zeros(num_predictions)
+    fp = torch.zeros(num_predictions)
 
     for prediction_index, prediction in enumerate(predictions):
-        box = prediction["bbox"]
+        box = torch.tensor(prediction["bbox"])
 
         max_overlap = -np.inf
         jmax = -1
@@ -125,8 +136,8 @@ def recall_precision(
         if len(gt_boxes) > 0:
             overlaps = get_overlaps(gt_boxes, box)
 
-            max_overlap = np.max(overlaps)
-            jmax = np.argmax(overlaps)
+            max_overlap = torch.max(overlaps)
+            jmax = torch.argmax(overlaps)
 
         if max_overlap >= iou_threshold:
             if gt_checked[jmax] == 0:
@@ -138,13 +149,13 @@ def recall_precision(
             fp[prediction_index] = 1.0
 
     # compute precision recall
-    fp = np.cumsum(fp, axis=0)
-    tp = np.cumsum(tp, axis=0)
+    fp = torch.cumsum(fp, axis=0)
+    tp = torch.cumsum(tp, axis=0)
 
     recalls = tp / float(num_gts)
 
     # avoid divide by zero in case the first detection matches a difficult ground truth
-    precisions = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
+    precisions = tp / (tp + fp + METRIC_EPS)
 
     ap = get_ap(recalls, precisions)
 

@@ -35,14 +35,16 @@ class MAP(Metric):
 
     def update(self, preds: Any, target: Any):
 
+        #TODO: Change update signature to match that of Metric baseclass; Do preds and target have to be Tensors.
+
         assert len(target.keys()) == len(preds.keys())
 
         for i, category_id in enumerate(range(0, self.num_classes)):
             if category_id in target:
                 _, _, average_precision = recall_precision(target[category_id],
-                                                                          preds[category_id],
-                                                                          self.iou_threshold)
-                self.average_precisions[i] = torch.tensor(average_precision)
+                                                           preds[category_id],
+                                                           self.iou_threshold)
+                self.average_precisions[i] = average_precision
 
     def compute(self):
         map = torch.mean(self.average_precisions)
@@ -96,13 +98,7 @@ aps = np.zeros(num_class_names)
 #
 # for j in sorted(zip(class_names, aps.flatten().tolist())):
 #     print(j)
-#%%
 
-
-
-
-            # TODO: pred_by_id and gt_by_id are dataset specific:
-            # TODO: Do preds and target have to be a torch.tensor if so then how might structure the input?
 
 map_test = MAP(iou_threshold=0.5)
 map_out = map_test(pred_by_id, gt_by_id)
