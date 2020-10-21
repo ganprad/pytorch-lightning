@@ -36,20 +36,17 @@ class MAP(Metric, ABC):
         assert len(target) == len(preds)
 
         for index, category_id in enumerate(target.keys()):
-            if category_id in preds:  # if we predicted at leas one object for this class.
+            if category_id in preds:
 
                 ground_truth = target[category_id]
-                predictions =  preds[category_id]
-                num_gts = len(ground_truth)
+                predictions = preds[category_id]
 
                 image_gts = group_by_key(ground_truth, "image_id")
-
                 image_gt_boxes = {
                     img_id: np.array([[float(z) for z in b["bbox"]] for b in boxes]) for img_id, boxes in
                     image_gts.items()
                 }
                 image_gt_checked = {img_id: np.zeros(len(boxes)) for img_id, boxes in image_gts.items()}
-
                 predictions = sorted(predictions, key=lambda x: x["score"], reverse=True)
 
                 # go down dets and mark TPs and FPs
@@ -90,7 +87,7 @@ class MAP(Metric, ABC):
                 fp = torch.cumsum(fp, axis=0)
                 tp = torch.cumsum(tp, axis=0)
 
-                recalls = tp / float(num_gts)
+                recalls = tp / float(len(ground_truth))
                 precisions = tp / np.maximum(tp + fp, METRIC_EPS)
                 ap = get_average_precision(precisions, recalls)
 
