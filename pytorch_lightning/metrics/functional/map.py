@@ -1,6 +1,3 @@
-#%%
-import argparse
-import json
 from pytorch_lightning.metrics.utils import METRIC_EPS
 from collections import OrderedDict
 from typing import Tuple, List, Dict, Any, Union
@@ -28,140 +25,6 @@ def group_by_key(list_dicts: List[dict], key: Any) -> defaultdict:
     return groups
 
 
-def get_envelope(precisions: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
-    """Compute the envelope of the precision curve.
-
-    Args:
-      precisions:
-
-    Returns: enveloped precision
-
-    """
-    for i in range(precisions.size(0) - 1, 0, -1):
-        precisions[i - 1] = torch.max(precisions[i - 1], precisions[i])
-    return precisions
-
-
-def get_ap(recalls: Union[torch.Tensor, np.ndarray], precisions: Union[torch.Tensor, np.ndarray]) \
-        -> Union[torch.Tensor, float]:
-    """Calculate area under precision/recall curve.
-
-    Args:
-      recalls:
-      precisions:
-
-    Returns:
-
-    """
-    # correct AP calculation
-    # first append sentinel values at the end
-    # recalls = torch.tensor(recalls)
-    # precisions = torch.tensor(precisions)
-
-    recalls = torch.cat((torch.tensor([0.0]),
-                         recalls,
-                         torch.tensor([1.0])))
-
-    precisions = torch.cat((torch.tensor([0.0]),
-                            precisions,
-                            torch.tensor([0.0])))
-
-    precisions = get_envelope(precisions)
-
-    # to calculate area under PR curve, look for points where X axis (recall) changes value
-    i = torch.where(recalls[1:] != recalls[:-1])[0]
-
-    # and sum (\Delta recall) * prec
-    ap = torch.sum((recalls[i + 1] - recalls[i]) * precisions[i + 1])
-    return ap
-
-
-def get_overlaps(gt_boxes: Union[torch.Tensor, np.ndarray],
-                 box: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
-    i_xmin = torch.max(gt_boxes[:, 0], box[0])
-    i_ymin = torch.max(gt_boxes[:, 1], box[1])
-
-    gt_xmax = gt_boxes[:, 0] + gt_boxes[:, 2]
-    gt_ymax = gt_boxes[:, 1] + gt_boxes[:, 3]
-
-    box_xmax = box[0] + box[2]
-    box_ymax = box[1] + box[3]
-
-    i_xmax = torch.min(gt_xmax, box_xmax)
-    i_ymax = torch.min(gt_ymax, box_ymax)
-
-    iw = torch.max(i_xmax - i_xmin, torch.tensor(0.0))
-    ih = torch.max(i_ymax - i_ymin, torch.tensor(0.0))
-
-    intersection = iw * ih
-
-    union = box[2] * box[3] + gt_boxes[:, 2] * gt_boxes[:, 3] - intersection
-
-    overlaps = intersection / (union + 1e-7)
-
-    return overlaps
-
-
-def recall_precision(
-    gt: List[dict], predictions: List[dict], iou_threshold: float
-) -> Tuple[np.array, np.array, np.array]:
-    num_gts = len(gt)
-    image_gts = group_by_key(gt, "image_id")
-
-    image_gt_boxes = {
-        img_id: torch.tensor([[float(z) for z in b["bbox"]] for b in boxes]) for img_id, boxes in image_gts.items()
-    }
-    image_gt_checked = {img_id: torch.zeros(len(boxes)) for img_id, boxes in image_gts.items()}
-
-    predictions = sorted(predictions, key=lambda x: x["score"], reverse=True)
-
-    # go down dets and mark TPs and FPs
-    num_predictions = len(predictions)
-    tp = torch.zeros(num_predictions)
-    fp = torch.zeros(num_predictions)
-
-    for prediction_index, prediction in enumerate(predictions):
-        box = torch.tensor(prediction["bbox"])
-
-        max_overlap = -np.inf
-        jmax = -1
-
-        try:
-            gt_boxes = image_gt_boxes[prediction["image_id"]]  # gt_boxes per image
-            gt_checked = image_gt_checked[prediction["image_id"]]  # gt flags per image
-        except KeyError:
-            gt_boxes = []
-            gt_checked = None
-
-        if len(gt_boxes) > 0:
-            overlaps = get_overlaps(gt_boxes, box)
-
-            max_overlap = torch.max(overlaps)
-            jmax = torch.argmax(overlaps)
-
-        if max_overlap >= iou_threshold:
-            if gt_checked[jmax] == 0:
-                tp[prediction_index] = 1.0
-                gt_checked[jmax] = 1
-            else:
-                fp[prediction_index] = 1.0
-        else:
-            fp[prediction_index] = 1.0
-
-    # compute precision recall
-    fp = torch.cumsum(fp, axis=0)
-    tp = torch.cumsum(tp, axis=0)
-
-    recalls = tp / float(num_gts)
-
-    # avoid divide by zero in case the first detection matches a difficult ground truth
-    precisions = tp / (tp + fp + METRIC_EPS)
-
-    ap = get_ap(recalls, precisions)
-
-    return recalls, precisions, ap
-
-
 def get_category2name(categories: List[Dict[str, Any]]) -> OrderedDict:
     """Creates mapping from category_id to category_name
 
@@ -184,3 +47,57 @@ def get_category2name(categories: List[Dict[str, Any]]) -> OrderedDict:
     for element in categories:
         result[element["id"]] = element["name"]
     return result
+
+
+def get_average_precision(precisions, recalls):
+    r = torch.cat([torch.tensor([0]), recalls, torch.tensor([1])])
+    p = torch.cat([torch.tensor([1]), precisions, torch.tensor([0])])#Changed 1
+    return torch.trapz(p, r)
+
+
+def get_iou(pred, target, box_format="top_corner"):
+    if box_format=="top_corner":
+        pred_x1, pred_y1, pred_width, pred_height = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
+        target_x1, target_y1, target_width, target_height = target[:, 0], target[:, 1], target[:, 2], target[:, 3]
+
+        target_x2 = target_x1 + target_width
+        target_y2 = target_y1 + target_height
+        pred_x2 = pred_x1 + pred_width
+        pred_y2 = pred_y1 + pred_height
+
+    elif box_format=="corners":
+        pred_x1, pred_y1, pred_x2, pred_y2 = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
+        target_x1, target_y1, target_x2, target_y2 = target[:, 0], target[:, 1], target[:, 2], target[:, 3]
+
+    elif box_format=="mid_point":
+        pred_mid_x, pred_mid_y, pred_width, pred_height = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
+        target_mid_x, target_mid_y, target_width, target_height = target[:, 0], target[:, 1], target[:, 2], target[:, 3]
+
+        target_x1 = target_mid_x-(target_width/2)
+        target_y1 = target_mid_y-(target_height/2)
+        target_x2 = target_mid_x + (target_width/2)
+        target_y2 = target_mid_y + (target_height/2)
+
+        pred_x1 = pred_mid_x-(pred_width/2)
+        pred_y1 = pred_mid_y-(pred_height/2)
+        pred_x2 = pred_mid_x + (pred_width/2)
+        pred_y2 = pred_mid_y + (pred_height/2)
+
+    i_xmin = np.maximum(target_x1, pred_x1)
+    i_ymin = np.maximum(target_y1, pred_y1)
+    i_xmax = -np.maximum(-target_x2, -pred_x2)
+    i_ymax = -np.maximum(-target_y2, -pred_y2)
+    iw = (i_xmax - i_xmin).clamp(0.0)
+    ih = (i_ymax - i_ymin).clamp(0.0)
+    intersection = iw * ih
+    union = (pred_x2-pred_x1)*(pred_y2-pred_y1) + (target_x2-target_x1)*(target_y2-target_y1) - intersection
+
+    return intersection/(union+METRIC_EPS)
+
+
+def groupby(x, keys):
+    unique = keys.unique()
+    gp = []
+    for i in unique:
+        gp.append(x[keys == i])
+    return gp
