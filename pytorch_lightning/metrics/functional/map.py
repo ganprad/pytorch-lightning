@@ -94,9 +94,9 @@ def get_iou(pred, target, box_format="top_corner"):
 
     return intersection/(union+METRIC_EPS)
 
-
+@torch.jit.script
 def groupby(x, keys):
-    unique = keys.unique()
+    unique = torch.unique(keys)
     gp = []
     for i in unique:
         gp.append(x[keys == i])

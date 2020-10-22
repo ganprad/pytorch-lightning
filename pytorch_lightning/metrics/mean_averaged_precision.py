@@ -2,7 +2,7 @@ from abc import ABC
 from typing import List, Optional, Any
 import numpy as np
 import torch
-from pytorch_lightning.metrics.functional.map import group_by_key, get_iou, get_average_precision
+from pytorch_lightning.metrics.functional.map import group_by_key, get_iou, get_average_precision, groupby
 from pytorch_lightning.metrics.metric import Metric
 from pytorch_lightning.metrics.utils import METRIC_EPS
 
@@ -31,19 +31,24 @@ class MAP(Metric, ABC):
         self.average_precisions = {}
 
 
-    def update(self, preds: Any, target: Any):
+    def update(self, preds: Any, targets: Any):
 
-        assert len(target) == len(preds)
+        assert len(targets) == len(preds)
+        # assert len(groupby(targets, targets[:, 1])) == len(groupby(preds, preds[:, 1]))
 
-        for index, category_id in enumerate(target.keys()):
+        # preds = groupby(preds, keys=preds[:, 1])
+        # targets = groupby(targets, keys=targets[:, 1])
+        # image_gts = [groupby(data, keys=data[:, 0]) for index, data in enumerate(targets)]
+
+        for index, category_id in enumerate(targets.keys()):
             if category_id in preds:
 
-                ground_truth = target[category_id]
+                ground_truth = targets[category_id]
                 predictions = preds[category_id]
 
                 image_gts = group_by_key(ground_truth, "image_id")
                 image_gt_boxes = {
-                    img_id: np.array([[float(z) for z in b["bbox"]] for b in boxes]) for img_id, boxes in
+                    img_id: torch.tensor([[float(z) for z in b["bbox"]] for b in boxes]) for img_id, boxes in
                     image_gts.items()
                 }
                 image_gt_checked = {img_id: np.zeros(len(boxes)) for img_id, boxes in image_gts.items()}
@@ -75,6 +80,7 @@ class MAP(Metric, ABC):
                         max_iou = torch.max(ious)
                         jmax = torch.argmax(ious)
 
+                    #TODO: Calculate everything for a range of iou_thresholds
                     if max_iou >= self.iou_threshold:
                         if gt_checked[jmax] == 0:
                             tp[prediction_index] = 1.0
